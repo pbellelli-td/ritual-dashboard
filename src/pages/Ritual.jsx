@@ -155,12 +155,13 @@ export default function Ritual({ currentUser }) {
     load();
   }, []);
 
+  // v2: pass weekOf so contacted flag is scoped per week
   async function toggleContacted(account) {
     const next = !account.contacted;
     setAccounts((prev) => prev.map((a) =>
       a.account_id === account.account_id ? { ...a, contacted: next, contacted_by: next ? authorName : null } : a
     ));
-    try { await setContacted(account.account_id, next, authorName); }
+    try { await setContacted(account.account_id, weekOf, next, authorName); }
     catch (e) {
       setAccounts((prev) => prev.map((a) => a.account_id === account.account_id ? { ...a, contacted: !next } : a));
       alert(e.message);
