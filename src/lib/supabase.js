@@ -1,5 +1,5 @@
 // Direct Supabase client — called from browser, no backend needed.
-// Uses anon key + RLS (authenticated users only).
+// Uses anon key + RLS disabled (internal tool).
 
 const SUPABASE_URL = 'https://yhvjxbjpbjfofpbingop.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlodmp4YmpwYmpmb2ZwYmluZ29wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyNjg3MTMsImV4cCI6MjA5NjgzMjQzOX0.mhC6WDXANbET6XS7haSfAKORdEycHsQxLWyvgiLwGNQ';
@@ -46,7 +46,6 @@ export async function signIn(email, password) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error_description || data.message || 'Login failed');
   _session = data;
-  // Store session in localStorage for persistence
   localStorage.setItem('ritual_session', JSON.stringify(data));
   return data;
 }
@@ -67,7 +66,6 @@ export function loadSession() {
     const raw = localStorage.getItem('ritual_session');
     if (!raw) return null;
     const s = JSON.parse(raw);
-    // Check expiry
     if (s.expires_at && Date.now() / 1000 > s.expires_at) {
       localStorage.removeItem('ritual_session');
       return null;
@@ -112,21 +110,35 @@ export async function getRitual(weekOf) {
     if (!weeks.length) return { week_of: null, accounts: [] };
     wk = weeks[0];
   }
+
   const accounts = await supa('ritual_accounts', {
     params: { select: '*', week_of: `eq.${wk}`, order: 'score.desc' },
   });
   if (!accounts.length) return { week_of: wk, accounts: [] };
 
   const ids = accounts.map((a) => a.account_id);
+
   const [notes, contacted] = await Promise.all([
     supa('ritual_notes', {
-      params: { select: '*', account_id: `in.(${ids.join(',')})`, order: 'created_at.asc' },
+      params: {
+        select: '*',
+        account_id: `in.(${ids.join(',')})`,
+        order: 'created_at.asc',
+      },
     }),
-    supa('ritual_contacted', { params: { select: '*' } }),
+    // v2: filter ritual_contacted by week_of so history is preserved across weeks
+    supa('ritual_contacted', {
+      params: {
+        select: '*',
+        week_of: `eq.${wk}`,
+        account_id: `in.(${ids.join(',')})`,
+      },
+    }),
   ]);
 
   const notesByAccount = {};
   for (const n of notes) (notesByAccount[n.account_id] ||= []).push(n);
+
   const contactedMap = {};
   for (const c of contacted) contactedMap[c.account_id] = c;
 
@@ -156,12 +168,14 @@ export async function deleteNote(id) {
   return { ok: true };
 }
 
-export async function setContacted(account_id, contacted, contacted_by) {
+// v2: now requires week_of to scope contacted flag per week
+export async function setContacted(account_id, week_of, contacted, contacted_by) {
   const data = await supa('ritual_contacted', {
     method: 'POST',
-    params: { on_conflict: 'account_id' },
+    params: { on_conflict: 'account_id,week_of' },
     body: [{
       account_id,
+      week_of,
       contacted,
       contacted_by: contacted ? contacted_by : null,
       contacted_at: contacted ? new Date().toISOString() : null,
