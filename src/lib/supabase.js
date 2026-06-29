@@ -170,3 +170,35 @@ export async function setContacted(account_id, contacted, contacted_by) {
   });
   return data[0];
 }
+
+export async function setStatus(account_id, status, updated_by) {
+  const data = await supa('ritual_statuses', {
+    method: 'POST',
+    params: { on_conflict: 'account_id' },
+    body: [{ account_id, status, updated_by, updated_at: new Date().toISOString() }],
+    prefer: 'resolution=merge-duplicates,return=representation',
+  });
+  return data[0];
+}
+
+export async function generateEmail(prompt) {
+  const CLAUDE_KEY = import.meta.env.VITE_CLAUDE_API_KEY;
+  if (!CLAUDE_KEY) throw new Error('VITE_CLAUDE_API_KEY not set');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': CLAUDE_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || 'Claude API error'); }
+  const json = await res.json();
+  return json.content[0].text;
+}
