@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { getRitual, getWeeks, addNote, deleteNote, setContacted, setStatus, generateEmail } from '../lib/supabase.js';
 
-const CSAMS = ['Julia Seitz', 'Maria Mazur', 'Valentina Manta', 'Paolo Zafra', 'Reina Kurosawa', 'Piera Bellelli', 'Yonis Brander', 'Kate'];
+const CSAMS = ['Julia Seitz', 'Maria Mazur', 'Valentina Manta', 'Paolo Zafra', 'Reina Kurosawa', 'Piera Bellelli'];
 
 const RAG = {
   critical: { label: '🔴 Critical', badge: 'bg-red-50 text-red-700 ring-1 ring-red-200', order: 0 },
@@ -162,7 +162,7 @@ function NoteThread({ account, authorName, onRefresh }) {
 }
 
 // ── Account Row ────────────────────────────────────────────────────
-function AccountRow({ account, authorName, onToggleContacted, onStatusChange, onRefresh }) {
+function AccountRow({ account, authorName, selected, onToggleSelect, onToggleContacted, onStatusChange, onRefresh }) {
   const [open, setOpen] = useState(false);
   const [showEmail, setShowEmail] = useState(false);
   const rag = RAG[account.rag] || RAG.none;
@@ -183,8 +183,13 @@ function AccountRow({ account, authorName, onToggleContacted, onStatusChange, on
   return (
     <>
       {showEmail && <EmailModal account={account} authorName={authorName} onClose={() => setShowEmail(false)} onSent={handleEmailSent} />}
-      <div className={`bg-white rounded-xl ring-1 ring-gray-100 shadow-sm overflow-hidden ${account.status === 'churned' ? 'opacity-40' : account.contacted ? 'opacity-60' : ''}`}>
+      <div className={`bg-white rounded-xl ring-1 ${selected ? 'ring-2 ring-accent' : 'ring-gray-100'} shadow-sm overflow-hidden ${account.status === 'churned' ? 'opacity-40' : account.contacted ? 'opacity-60' : ''}`}>
         <div className="px-4 py-3 flex items-start gap-3">
+          {/* Batch selection checkbox */}
+          <div className="pt-1 shrink-0">
+            <input type="checkbox" checked={selected} onChange={() => onToggleSelect(account.account_id)} className="w-4 h-4 rounded border-gray-300 text-accent cursor-pointer" title="Select for batch outreach" />
+          </div>
+
           {/* Contacted checkbox */}
           <div className="pt-1 shrink-0">
             <input type="checkbox" checked={account.contacted} onChange={() => onToggleContacted(account)} className="w-4 h-4 rounded border-gray-300 text-accent cursor-pointer" title="Mark as contacted" />
@@ -344,6 +349,52 @@ export default function Ritual() {
   const [filterSignal, setFilterSignal] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [copiedBatch, setCopiedBatch] = useState(false);
+
+  function toggleSelect(account_id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(account_id)) next.delete(account_id); else next.add(account_id);
+      return next;
+    });
+  }
+
+  function selectAllFiltered() {
+    setSelectedIds(new Set(filtered.map(a => a.account_id)));
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  // Builds the JSON payload for /batchoutreach-data and copies it to clipboard.
+  // Only Supabase-known fields are included — no HubSpot/Gmail call happens here.
+  function copyBatchPayload() {
+    const selectedAccounts = filtered.filter(a => selectedIds.has(a.account_id));
+    const payload = selectedAccounts.map(a => ({
+      account_name: a.account_name,
+      csam: a.csam,
+      market: a.market || null,
+      health: a.health || null,
+      rag: a.rag,
+      score: a.score ?? null,
+      last_login: a.last_login || null,
+      last_contact: a.last_contact || null,
+      arr: a.arr || null,
+      status: a.status || 'not_started',
+      churn: a.churn || null,
+      expansion: a.expansion || null,
+      action: a.action || null,
+      contacted: !!a.contacted,
+      notes: (a.notes || []).map(n => ({ author: n.author, body: n.body, created_at: n.created_at })),
+      hubspot_url: a.hubspot_url || null,
+    }));
+    const command = `/batchoutreach-data\n${JSON.stringify(payload, null, 2)}`;
+    navigator.clipboard.writeText(command);
+    setCopiedBatch(true);
+    setTimeout(() => setCopiedBatch(false), 2500);
+  }
 
   function load(week) {
     setLoading(true); setError(null);
@@ -404,7 +455,7 @@ export default function Ritual() {
   async function toggleContacted(account) {
     const next = !account.contacted;
     setAccounts(prev => prev.map(a => a.account_id === account.account_id ? { ...a, contacted: next, contacted_by: next ? authorName : null } : a));
-    try { await setContacted(account.account_id, weekOf, next, authorName); }
+    try { await setContacted(account.account_id, next, authorName); }
     catch (e) {
       setAccounts(prev => prev.map(a => a.account_id === account.account_id ? { ...a, contacted: !next } : a));
       alert(e.message);
@@ -415,16 +466,28 @@ export default function Ritual() {
     setAccounts(prev => prev.map(a => a.account_id === account_id ? { ...a, status: newStatus, status_updated_by: authorName } : a));
   }
 
+  // Counts respect CSAM/status/search filters (so picking a CSAM updates the numbers),
+  // but stay independent of filterRag/filterSignal themselves — those are the filters
+  // these very buttons control, so they must show the count within the OTHER active
+  // filters, not collapse to match whichever RAG/signal is currently selected.
+  const countsBase = useMemo(() => {
+    let list = [...accounts];
+    if (filterCsam) list = list.filter(a => a.csam === filterCsam);
+    if (filterStatus) list = list.filter(a => a.status === filterStatus);
+    if (search) list = list.filter(a => a.account_name.toLowerCase().includes(search.toLowerCase()));
+    return list;
+  }, [accounts, filterCsam, filterStatus, search]);
+
   const counts = useMemo(() => {
     const c = { critical: 0, at_risk: 0, watch: 0, expansion: 0, churn: 0, contacted: 0 };
-    for (const a of accounts) {
+    for (const a of countsBase) {
       if (c[a.rag] !== undefined) c[a.rag]++;
       if (a.expansion) c.expansion++;
       if (a.churn) c.churn++;
       if (a.contacted) c.contacted++;
     }
     return c;
-  }, [accounts]);
+  }, [countsBase]);
 
   const topSignals = useMemo(() => {
     const sig = [];
@@ -454,7 +517,7 @@ export default function Ritual() {
   if (error) return <div className="max-w-xl mx-auto mt-16 p-6 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm"><strong>Error:</strong><p className="font-mono text-xs mt-1 break-all">{error}</p></div>;
 
   return (
-    <div className="max-w-screen-lg mx-auto px-4 py-8">
+    <div className="max-w-screen-lg mx-auto px-4 py-8 pb-24">
       {/* Author selector */}
       {!authorName && (
         <div className="mb-6 bg-accent/10 border border-accent/20 rounded-xl p-4 flex items-center gap-3">
@@ -538,11 +601,31 @@ export default function Ritual() {
         {filtered.length === 0 && <div className="text-center py-12 text-gray-400 text-sm">{hasFilters ? 'No accounts match your filters.' : 'No data for this week yet.'}</div>}
         {filtered.map(a => (
           <AccountRow key={a.account_id} account={a} authorName={authorName}
+            selected={selectedIds.has(a.account_id)}
+            onToggleSelect={toggleSelect}
             onToggleContacted={toggleContacted}
             onStatusChange={handleStatusChange}
             onRefresh={() => load(weekOf)} />
         ))}
       </div>
+
+      {/* Batch selection bar — sticky, shown when 1+ accounts selected */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-navy text-white shadow-2xl z-40">
+          <div className="max-w-screen-lg mx-auto px-4 py-3 flex items-center gap-3">
+            <span className="text-sm font-medium">{selectedIds.size} account{selectedIds.size !== 1 ? 's' : ''} selected</span>
+            <button onClick={selectAllFiltered} className="text-xs text-slate-300 hover:text-white underline">select all {filtered.length} shown</button>
+            <button onClick={clearSelection} className="text-xs text-slate-300 hover:text-white underline">clear</button>
+            <div className="flex-1" />
+            <button
+              onClick={copyBatchPayload}
+              className="px-4 py-2 bg-accent hover:bg-accent-dark text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              {copiedBatch ? '✓ Copied — paste into Claude' : '📋 Copy for Claude (/batchoutreach-data)'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
