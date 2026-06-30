@@ -118,7 +118,7 @@ export async function getRitual(weekOf) {
 
   const ids = accounts.map((a) => a.account_id);
 
-  const [notes, contacted] = await Promise.all([
+  const [notes, contacted, statuses] = await Promise.all([
     supa('ritual_notes', {
       params: {
         select: '*',
@@ -126,11 +126,16 @@ export async function getRitual(weekOf) {
         order: 'created_at.asc',
       },
     }),
-    // v2: filter ritual_contacted by week_of so history is preserved across weeks
     supa('ritual_contacted', {
       params: {
         select: '*',
         week_of: `eq.${wk}`,
+        account_id: `in.(${ids.join(',')})`,
+      },
+    }),
+    supa('ritual_statuses', {
+      params: {
+        select: '*',
         account_id: `in.(${ids.join(',')})`,
       },
     }),
@@ -142,6 +147,9 @@ export async function getRitual(weekOf) {
   const contactedMap = {};
   for (const c of contacted) contactedMap[c.account_id] = c;
 
+  const statusMap = {};
+  for (const s of statuses) statusMap[s.account_id] = s;
+
   return {
     week_of: wk,
     accounts: accounts.map((a) => ({
@@ -150,6 +158,7 @@ export async function getRitual(weekOf) {
       contacted: contactedMap[a.account_id]?.contacted || false,
       contacted_by: contactedMap[a.account_id]?.contacted_by || null,
       contacted_at: contactedMap[a.account_id]?.contacted_at || null,
+      status: statusMap[a.account_id]?.status || a.status || 'not_started',
     })),
   };
 }
