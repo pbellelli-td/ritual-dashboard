@@ -186,13 +186,15 @@ function AccountRow({ account, authorName, selected, onToggleSelect, onToggleCon
       <div className={`bg-white rounded-xl ring-1 ${selected ? 'ring-2 ring-accent' : 'ring-gray-100'} shadow-sm overflow-hidden ${account.status === 'churned' ? 'opacity-40' : account.contacted ? 'opacity-60' : ''}`}>
         <div className="px-4 py-3 flex items-start gap-3">
           {/* Batch selection checkbox */}
-          <div className="pt-1 shrink-0">
+          <div className="pt-1 shrink-0 flex flex-col items-center gap-0.5">
             <input type="checkbox" checked={selected} onChange={() => onToggleSelect(account.account_id)} className="w-4 h-4 rounded border-gray-300 text-accent cursor-pointer" title="Select for batch outreach" />
+            <span className="text-[9px] leading-none text-gray-400 font-medium uppercase tracking-wide">Select</span>
           </div>
 
           {/* Contacted checkbox */}
-          <div className="pt-1 shrink-0">
+          <div className="pt-1 shrink-0 flex flex-col items-center gap-0.5">
             <input type="checkbox" checked={account.contacted} onChange={() => onToggleContacted(account)} className="w-4 h-4 rounded border-gray-300 text-accent cursor-pointer" title="Mark as contacted" />
+            <span className="text-[9px] leading-none text-gray-400 font-medium uppercase tracking-wide">Done</span>
           </div>
 
           {/* Main content */}
@@ -629,3 +631,4 @@ export default function Ritual() {
     </div>
   );
 }
+
