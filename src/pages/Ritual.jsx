@@ -238,18 +238,11 @@ function AccountRow({ account, authorName, onToggleContacted, onStatusChange, on
 }
 
 // ── Executive Panel ────────────────────────────────────────────────
-function ExecutivePanel({ accounts }) {
+function ExecutivePanel({ accounts, prevAccounts }) {
   const stats = useMemo(() => {
-    let arrAtRisk = 0;
-    let arrExpansion = 0;
-    let expansionCount = 0;
-    let churnConfirmed = 0;
-    let saveAttempt = 0;
-    let criticalCount = 0;
-    let criticalContacted = 0;
-    let atRiskCount = 0;
-    let atRiskContacted = 0;
-
+    let arrAtRisk = 0, arrExpansion = 0, expansionCount = 0;
+    let churnConfirmed = 0, saveAttempt = 0;
+    let criticalCount = 0, criticalContacted = 0, atRiskCount = 0, atRiskContacted = 0;
     for (const a of accounts) {
       const arr = parseFloat(String(a.arr || '').replace(/[^0-9.]/g, '')) || 0;
       if (a.rag === 'critical' || a.rag === 'at_risk') arrAtRisk += arr;
@@ -259,13 +252,29 @@ function ExecutivePanel({ accounts }) {
       if (a.rag === 'critical') { criticalCount++; if (a.contacted) criticalContacted++; }
       if (a.rag === 'at_risk') { atRiskCount++; if (a.contacted) atRiskContacted++; }
     }
-
     const totalPriority = criticalCount + atRiskCount;
     const totalContacted = criticalContacted + atRiskContacted;
     const contactedPct = totalPriority > 0 ? Math.round((totalContacted / totalPriority) * 100) : 0;
-
     return { arrAtRisk, arrExpansion, expansionCount, churnConfirmed, saveAttempt, criticalCount, atRiskCount, totalPriority, totalContacted, contactedPct };
   }, [accounts]);
+
+  const prev = useMemo(() => {
+    if (!prevAccounts?.length) return null;
+    let c = 0, r = 0;
+    for (const a of prevAccounts) {
+      if (a.rag === 'critical') c++;
+      if (a.rag === 'at_risk') r++;
+    }
+    return { criticalCount: c, atRiskCount: r, total: c + r };
+  }, [prevAccounts]);
+
+  function delta(now, before) {
+    if (before === null || before === undefined) return null;
+    const d = now - before;
+    if (d === 0) return <span className="text-slate-500 text-xs ml-1">→ same</span>;
+    if (d > 0) return <span className="text-red-400 text-xs ml-1">↑ +{d} vs prev week</span>;
+    return <span className="text-emerald-400 text-xs ml-1">↓ {d} vs prev week</span>;
+  }
 
   function fmtArr(n) {
     if (!n) return '—';
@@ -281,7 +290,10 @@ function ExecutivePanel({ accounts }) {
         <div className="bg-white/5 rounded-lg px-4 py-3">
           <p className="text-xs text-slate-400 mb-1">ARR at risk</p>
           <p className="text-2xl font-semibold text-red-400">{fmtArr(stats.arrAtRisk)}</p>
-          <p className="text-xs text-slate-500 mt-0.5">{stats.criticalCount} critical · {stats.atRiskCount} at risk</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {stats.criticalCount} critical · {stats.atRiskCount} at risk
+            {prev && delta(stats.criticalCount, prev.criticalCount)}
+          </p>
         </div>
         {/* Expansion pipeline */}
         <div className="bg-white/5 rounded-lg px-4 py-3">
@@ -324,6 +336,7 @@ export default function Ritual() {
   const [weekOf, setWeekOf] = useState(null);
   const [weeks, setWeeks] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [prevAccounts, setPrevAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filterCsam, setFilterCsam] = useState('');
@@ -335,12 +348,58 @@ export default function Ritual() {
   function load(week) {
     setLoading(true); setError(null);
     getRitual(week)
-      .then(d => { setWeekOf(d.week_of); setAccounts(d.accounts || []); })
+      .then(d => {
+        setWeekOf(d.week_of);
+        setAccounts(d.accounts || []);
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { getWeeks().then(setWeeks).catch(() => {}); load(); }, []);
+  useEffect(() => {
+    getWeeks().then(ws => {
+      setWeeks(ws);
+      // Load prev week for WoW delta
+      if (ws.length > 1) {
+        getRitual(ws[1]).then(d => setPrevAccounts(d.accounts || [])).catch(() => {});
+      }
+    }).catch(() => {});
+    load();
+  }, []);
+
+  function exportCsv() {
+    const rows = filtered.map(a => ({
+      Account: a.account_name,
+      CSAM: a.csam,
+      Market: a.market || '',
+      RAG: a.rag,
+      Score: a.score,
+      Health: a.health || '',
+      ARR: a.arr || '',
+      Status: a.status || 'not_started',
+      'Last Login': a.last_login || '',
+      'Last Contact': a.last_contact || '',
+      Contacted: a.contacted ? 'Yes' : 'No',
+      'Contacted By': a.contacted_by || '',
+      Expansion: a.expansion || '',
+      Churn: a.churn || '',
+      Action: a.action || '',
+      Notes: a.notes.map(n => `${n.author}: ${n.body}`).join(' | '),
+      HubSpot: a.hubspot_url || '',
+    }));
+    const headers = Object.keys(rows[0] || {});
+    const csv = [
+      headers.join(','),
+      ...rows.map(r => headers.map(h => `"${String(r[h] || '').replace(/"/g, '""')}"`).join(','))
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ritual-${weekOf || 'export'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   async function toggleContacted(account) {
     const next = !account.contacted;
@@ -430,7 +489,7 @@ export default function Ritual() {
       </div>
 
       {/* Executive panel */}
-      <ExecutivePanel accounts={accounts} />
+      <ExecutivePanel accounts={accounts} prevAccounts={prevAccounts} />
 
       {/* Top signals */}
       {topSignals.length > 0 && (
@@ -471,6 +530,7 @@ export default function Ritual() {
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search account…" className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-accent/30 w-44" />
         {hasFilters && <button onClick={() => { setFilterCsam(''); setFilterRag(''); setFilterSignal(''); setFilterStatus(''); setSearch(''); }} className="text-xs text-gray-400 hover:text-gray-600 px-2">Clear all</button>}
         <span className="ml-auto text-xs text-gray-400 self-center">{filtered.length} shown</span>
+        <button onClick={exportCsv} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium px-3 py-1.5 rounded-lg transition-colors">⬇ Export CSV</button>
       </div>
 
       {/* Account cards */}
